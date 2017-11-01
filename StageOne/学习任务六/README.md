@@ -1,0 +1,1 @@
+hal2fw.md是makefile的简要介绍，一个hal层到framework层的demon编写过程，以及总结。

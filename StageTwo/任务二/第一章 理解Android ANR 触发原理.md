@@ -259,7 +259,7 @@ BroadcastReceiver根据广播发送方式可分为三类：
             if (mService.mProcessesReady && r.dispatchTime > 0) {
                 long now = SystemClock.uptimeMillis();
                 if ((numReceivers > 0) && (now > r.dispatchTime + (2*mTimeoutPeriod*numReceivers))) {
-                    broadcastTimeoutLocked(false); //当广播处理时间超时，则强制结束这条广播
+                    broadcastTimeoutLocked(false); //当广播处理时间超过所有广播的处理时间，则强制结束这条广播
                 }
             }
             ...
@@ -272,14 +272,14 @@ BroadcastReceiver根据广播发送方式可分为三类：
                         r.resultData, r.resultExtras, false, false, r.userId);
                 }
 
-                cancelBroadcastTimeoutLocked(); //取消BROADCAST_TIMEOUT_MSG消息
+                cancelBroadcastTimeoutLocked(); //如果所有广播已经被处理完成，取消BROADCAST_TIMEOUT_MSG消息
                 addBroadcastToHistoryLocked(r);
                 mOrderedBroadcasts.remove(0);
                 continue;
             }
         } while (r == null);
 
-        //part3: 获取下一个receiver
+        //part3: 埋炸弹
         r.receiverTime = SystemClock.uptimeMillis();
         if (recIdx == 0) {
             r.dispatchTime = r.receiverTime;
@@ -290,7 +290,7 @@ BroadcastReceiver根据广播发送方式可分为三类：
             setBroadcastTimeoutLocked(timeoutTime); //设置广播超时延时消息
         }
 
-        //part4: 处理下条有序广播
+        //part4: 处理有序广播
         ProcessRecord app = mService.getProcessRecordLocked(targetProcess,
                 info.activityInfo.applicationInfo.uid, false);
         if (app != null && app.thread != null) {
@@ -459,7 +459,7 @@ final void broadcastTimeoutLocked(boolean fromMsg) {
 1. 某个广播总处理时间 > 2* receiver总个数 * mTimeoutPeriod, 其中mTimeoutPeriod，前台队列默认为10s，后台队列默认为60s;
 2. 某个receiver的执行时间超过mTimeoutPeriod；
 
-&emsp;&emsp;BroadcastReceiver的埋炸弹、拆炸弹、引爆炸弹都在processNextBroadcast（）中完成，超时只监测串行处理的广播。埋炸弹通过setBroadcastTimeoutLocked（）方法将一个delay消息发送给BroadcastQueue.BrocastHandler。当串行广播未超时（两种情况都未超时），则移除delay消息，否则调用broadcastTimeoutLocked（）来处理超时。
+&emsp;&emsp;BroadcastReceiver的埋炸弹、拆炸弹、引爆炸弹都在processNextBroadcast（）中完成，超时只监测串行处理的广播。埋炸弹通过setBroadcastTimeoutLocked（）方法中首先判断是否超时，如果超时才将消息发送给BroadcastQueue.BrocastHandler。如果当前广播为动态注册的串行广播时，将广播分发给客户端，客户端调用onReceive（）处理；如果当前广播是静态注册并且需要启进程的广播，那么等进程启动完毕后，将广播发送给客户端，客户端调用onReceive（）来处理广播消息；接着判断当前时间是否超过所有广播的总处理时间，如果大于则ANR，否则判断单个广播的处理时间是否超过每个广播规定的处理时间。当广播未超时，则移除delay消息，否则调用broadcastTimeoutLocked（）来处理超时。
 
 ## 1.4 ContentProvider
 &emsp;&emsp;ContentProvider Timeout是位于”ActivityManager”线程中的AMS.MainHandler收到CONTENT_PROVIDER_PUBLISH_TIMEOUT_MSG消息时触发。
@@ -567,38 +567,8 @@ private final void processContentProviderPublishTimedOutLocked(ProcessRecord app
 ### 1.4.4 小结
 &emsp;&emsp;contentprovider在进程启动后，调用AMS.attachApplicationLocked()方法向AMS.mainHandler发送一个delay消息CONTENT_PROVIDER_PUBLISH_TIMEOUT。当AMS.publishContentProviders（）方法成功执行（contentProvider成功publish）后将会移除CONTENT_PROVIDER_PUBLISH_TIMEOUT。如果在AMS.mainHandler收到超时消息前，contentProvider未成功publish，那么AMS将会调用processContentProviderPublishTimedOutLocked（）方法来处理超时。
 
-
-
-##　1.5 总结
+## 1.5 总结
 ### 1.5.1 超时阈值
-Service超时有两种情况：
-1. 前台服务，超时阈值SERVICE_TIMEOUT为20秒；
-2. 后台服务，超时阈值SERVICE_BACKGROUND_TIMEOUT为200秒；
-
-<br>广播超时有两种情况：
-1. 前台广播，超时阈值BROADCAST_FG_TIMEOUT为10s。
-2. 后台广播，超时阈值BROADCAST_BG_TIMEOUT为60s。
-
-ContentProvider超时：
-1. publish超时阈值CONTENT_PROVIDER_PUBLISH_TIMEOUT 为10s
-
-InputDispatching Timeout：
-1. 输入事件分发超时5秒，包括按键和触摸事件。
-
-### 1.5.2 超时监测
-Service超时检测机制
-1. 超过一定时间没有执行完相应操作来触发移除延时消息，则会触发anr;
-
-BroadcastReceiver超时检测机制
-1. 有序广播的总执行时间超过 2* receiver个数 * timeout时长，则会触发anr;
-2. 有序广播的某一个receiver执行过程超过 timeout时长，则会触发anr;
-
-ContentProvider超时监测机制
-1. publish contentProvider超时执行，未来得及撤销delay msg，触发ANR。
-
-&emsp;&emsp;对于Service, Broadcast, Input发生ANR之后,最终都会调用AMS.appNotResponding;对于provider,在其进程启动时publish过程可能会出现ANR, 则会直接杀进程以及清理相应信息,而不会弹出ANR的对话框。
-1.5 总结
-1.5.1 超时阈值
 Service超时有两种情况：
 1. 前台服务，超时阈值SERVICE_TIMEOUT为20秒；
 2. 后台服务，超时阈值SERVICE_BACKGROUND_TIMEOUT为200秒；
@@ -619,6 +589,8 @@ BroadcastReceiver超时检测机制
 ContentProvider超时监测机制
 1. publish contentProvider超时执行，未来得及撤销delay msg，触发ANR。
   对于Service, Broadcast, Input发生ANR之后,最终都会调用AMS.appNotResponding;对于provider,在其进程启动时publish过程可能会出现ANR, 则会直接杀进程以及清理相应信息,而不会弹出ANR的对话框。
+
+
 
 
 

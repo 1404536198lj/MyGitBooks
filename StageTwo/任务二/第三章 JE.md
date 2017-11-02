@@ -148,7 +148,7 @@ private final boolean attachApplicationLocked(IApplicationThread thread,
     ...
 }
 ```
-&emsp;&emsp;当Binder的服务端挂了之后，会通过binder的AppDeathRecipient来`通知AMS对客户端进行清理工作`。当crash的进程被kill后，会回调binderDied()方法。
+&emsp;&emsp;当process挂了之后，会通过binder的AppDeathRecipient来`通知AMS进行清理工作`。当crash的进程被kill后，会回调binderDied()方法。
 ```java
 private final class AppDeathRecipient implements IBinder.DeathRecipient {
     public void binderDied() {
@@ -182,9 +182,16 @@ private final class AppDeathRecipient implements IBinder.DeathRecipient {
 当应用发生crash后，处理流程如下：
 1. 进程创建之初就准备好的UncaughtHandler对象处理未捕获的异常，输出crash 信息以及调用栈到logcat。
 2. 发生crash的进程通过binder远程调用system _server的AMP.handleApplicationCrash（）：输出crash 信息到eventlog，输出进程crash信息到dropbox；（2）忽略接收到的广播、停止冻屏；（3）根据是否频繁crash以及是否是persistent进程来进行activity的相关操作；（4）弹出crash对话框。
-3. system_server进程执行完成，此时需要执行kill发生crash的进程；
+3. system_server进程执行完成，此时需要kill发生crash的进程；
 4. 当crash进程被kill，通过binder死亡通知，来告诉AMS来执行appDiedLocked()；
 5. 最后，执行清理应用相关的activity/service/ContentProvider/receiver组件信息。
+
+这基本就是整个应用Crash后系统的执行过程。 最后，再说说对于同一个app连续crash的情况：
+1. 当60s内连续crash两次的非persistent进程时，被认定为bad进程：那么如果第3次从后台启动该进程(Intent.getFlags来判断)，则会拒绝创建进程；
+2. 当crash次数达到两次的非persistent进程时，则再次杀该进程，即便允许自启的service也会在被杀后拒绝再次启动。
+
+特别需要注意的是：
+> 当binder死亡通知，来让AMS来清理进程时，如果进程没被kill干净，则kill，这就会产生一种情况：当AMS清理之前进程已经died，但是processRecord没有被清理，那么AMS会误杀复用了目标进程pid的进程，解决方法是。根据pid kill进程是对比uid是否相等。
 
 
 
